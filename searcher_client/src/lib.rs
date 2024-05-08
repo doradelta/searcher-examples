@@ -91,7 +91,7 @@ pub async fn send_bundle_with_confirmation(
     rpc_client: &RpcClient,
     searcher_client: &mut SearcherServiceClient<InterceptedService<Channel, ClientInterceptor>>,
     bundle_results_subscription: &mut Streaming<BundleResult>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<Signature>, Box<dyn std::error::Error>> {
     let bundle_signatures: Vec<Signature> =
         transactions.iter().map(|tx| tx.signatures[0]).collect();
 
@@ -101,78 +101,104 @@ pub async fn send_bundle_with_confirmation(
     let uuid = result.into_inner().uuid;
     info!("Bundle sent. UUID: {:?}", uuid);
 
-    info!("Waiting for 5 seconds to hear results...");
-    let mut time_left = 5000;
-    while let Ok(Some(Ok(results))) = timeout(
-        Duration::from_millis(time_left),
-        bundle_results_subscription.next(),
-    )
-    .await
-    {
-        let instant = Instant::now();
-        info!("bundle results: {:?}", results);
-        match results.result {
-            Some(BundleResultType::Accepted(Accepted {
-                slot: _s,
-                validator_identity: _v,
-            })) => {}
-            Some(BundleResultType::Rejected(rejected)) => {
-                match rejected.reason {
-                    Some(Reason::WinningBatchBidRejected(WinningBatchBidRejected {
-                        auction_id,
-                        simulated_bid_lamports,
-                        msg: _,
-                    })) => {
-                        return Err(Box::new(BundleRejectionError::WinningBatchBidRejected(
+    let mut tries = 0;
+
+    while tries < 30 {
+        info!("Waiting for 1 seconds to hear results...");
+        let mut time_left = 500;
+        while let Ok(Some(Ok(results))) = timeout(
+            Duration::from_millis(time_left),
+            bundle_results_subscription.next(),
+        )
+        .await
+        {
+            let instant = Instant::now();
+            info!("bundle results: {:?}", results);
+            match results.result {
+                Some(BundleResultType::Accepted(Accepted {
+                    slot: _s,
+                    validator_identity: _v,
+                })) => {
+                    break;
+                }
+                Some(BundleResultType::Rejected(rejected)) => {
+                    match rejected.reason {
+                        Some(Reason::WinningBatchBidRejected(WinningBatchBidRejected {
                             auction_id,
                             simulated_bid_lamports,
-                        )))
-                    }
-                    Some(Reason::StateAuctionBidRejected(StateAuctionBidRejected {
-                        auction_id,
-                        simulated_bid_lamports,
-                        msg: _,
-                    })) => {
-                        return Err(Box::new(BundleRejectionError::StateAuctionBidRejected(
+                            msg: _,
+                        })) => {
+                            tries += 1;
+                            continue;
+                            return Err(Box::new(BundleRejectionError::WinningBatchBidRejected(
+                                auction_id,
+                                simulated_bid_lamports,
+                            )));
+                        }
+                        Some(Reason::StateAuctionBidRejected(StateAuctionBidRejected {
                             auction_id,
                             simulated_bid_lamports,
-                        )))
-                    }
-                    Some(Reason::SimulationFailure(SimulationFailure { tx_signature, msg })) => {
-                        return Err(Box::new(BundleRejectionError::SimulationFailure(
+                            msg: _,
+                        })) => {
+                            tries += 1;
+                            continue;
+                            return Err(Box::new(BundleRejectionError::StateAuctionBidRejected(
+                                auction_id,
+                                simulated_bid_lamports,
+                            )));
+                        }
+                        Some(Reason::SimulationFailure(SimulationFailure {
                             tx_signature,
                             msg,
-                        )))
-                    }
-                    Some(Reason::InternalError(InternalError { msg })) => {
-                        return Err(Box::new(BundleRejectionError::InternalError(msg)))
-                    }
-                    _ => {}
-                };
+                        })) => {
+                            tries += 1;
+                            continue;
+                            return Err(Box::new(BundleRejectionError::SimulationFailure(
+                                tx_signature,
+                                msg,
+                            )));
+                        }
+                        Some(Reason::InternalError(InternalError { msg })) => {
+                            tries += 1;
+                            continue;
+                            return Err(Box::new(BundleRejectionError::InternalError(msg)));
+                        }
+                        _ => {}
+                    };
+                }
+                _ => {}
             }
-            _ => {}
+            time_left -= instant.elapsed().as_millis() as u64;
         }
-        time_left -= instant.elapsed().as_millis() as u64;
-    }
 
-    let futs: Vec<_> = bundle_signatures
-        .iter()
-        .map(|sig| {
-            rpc_client.get_signature_status_with_commitment(sig, CommitmentConfig::processed())
-        })
-        .collect();
-    let results = futures_util::future::join_all(futs).await;
-    if !results.iter().all(|r| matches!(r, Ok(Some(Ok(()))))) {
-        warn!("Transactions in bundle did not land");
+        let futs: Vec<_> = bundle_signatures
+            .iter()
+            .map(|sig| {
+                rpc_client.get_signature_status_with_commitment(sig, CommitmentConfig::processed())
+            })
+            .collect();
+        let results = futures_util::future::join_all(futs).await;
+        if !results.iter().all(|r| matches!(r, Ok(Some(Ok(()))))) {
+            tries += 1;
+            continue;
+            // warn!("Transactions in bundle did not land");
+            // return Err(Box::new(BundleRejectionError::InternalError(
+            //     "Searcher service did not provide bundle status in time".into(),
+            // )));
+        }
+        info!("Bundle landed successfully");
+        for sig in bundle_signatures.iter() {
+            info!("https://solscan.io/tx/{}", sig);
+        }
+        break;
+    }
+    if tries == 6 {
+        warn!("Bundle did not land in time");
         return Err(Box::new(BundleRejectionError::InternalError(
             "Searcher service did not provide bundle status in time".into(),
         )));
     }
-    info!("Bundle landed successfully");
-    for sig in bundle_signatures.iter() {
-        info!("https://solscan.io/tx/{}", sig);
-    }
-    Ok(())
+    Ok(bundle_signatures)
 }
 
 pub async fn send_bundle_no_wait(
