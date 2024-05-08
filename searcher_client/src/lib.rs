@@ -104,7 +104,7 @@ pub async fn send_bundle_with_confirmation(
     let mut tries = 0;
 
     while tries < 30 {
-        info!("Waiting for 1 seconds to hear results...");
+        info!("Waiting for 0.5 seconds to hear results...");
         let mut time_left = 500;
         while let Ok(Some(Ok(results))) = timeout(
             Duration::from_millis(time_left),
