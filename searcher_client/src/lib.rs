@@ -103,7 +103,9 @@ pub async fn send_bundle_with_confirmation(
 
     let mut tries = 0;
 
-    while tries < 30 {
+    let MAX_TRIES = 30;
+
+    while tries < MAX_TRIES {
         info!("Waiting for 0.5 seconds to hear results...");
         let mut time_left = 500;
         while let Ok(Some(Ok(results))) = timeout(
@@ -192,7 +194,7 @@ pub async fn send_bundle_with_confirmation(
         }
         break;
     }
-    if tries == 6 {
+    if tries == MAX_TRIES {
         warn!("Bundle did not land in time");
         return Err(Box::new(BundleRejectionError::InternalError(
             "Searcher service did not provide bundle status in time".into(),
