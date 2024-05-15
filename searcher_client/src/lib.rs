@@ -103,9 +103,9 @@ pub async fn send_bundle_with_confirmation(
 
     let mut tries = 0;
 
-    let MAX_TRIES = 30;
+    let max_tries = 30;
 
-    while tries < MAX_TRIES {
+    while tries < max_tries {
         info!("Waiting for 0.5 seconds to hear results...");
         let mut time_left = 500;
         while let Ok(Some(Ok(results))) = timeout(
@@ -115,14 +115,11 @@ pub async fn send_bundle_with_confirmation(
         .await
         {
             let instant = Instant::now();
-            info!("bundle results: {:?}", results);
             match results.result {
                 Some(BundleResultType::Accepted(Accepted {
                     slot: _s,
                     validator_identity: _v,
-                })) => {
-                    break;
-                }
+                })) => {}
                 Some(BundleResultType::Rejected(rejected)) => {
                     match rejected.reason {
                         Some(Reason::WinningBatchBidRejected(WinningBatchBidRejected {
@@ -130,8 +127,6 @@ pub async fn send_bundle_with_confirmation(
                             simulated_bid_lamports,
                             msg: _,
                         })) => {
-                            tries += 1;
-                            continue;
                             return Err(Box::new(BundleRejectionError::WinningBatchBidRejected(
                                 auction_id,
                                 simulated_bid_lamports,
@@ -142,8 +137,6 @@ pub async fn send_bundle_with_confirmation(
                             simulated_bid_lamports,
                             msg: _,
                         })) => {
-                            tries += 1;
-                            continue;
                             return Err(Box::new(BundleRejectionError::StateAuctionBidRejected(
                                 auction_id,
                                 simulated_bid_lamports,
@@ -153,16 +146,12 @@ pub async fn send_bundle_with_confirmation(
                             tx_signature,
                             msg,
                         })) => {
-                            tries += 1;
-                            continue;
                             return Err(Box::new(BundleRejectionError::SimulationFailure(
                                 tx_signature,
                                 msg,
                             )));
                         }
                         Some(Reason::InternalError(InternalError { msg })) => {
-                            tries += 1;
-                            continue;
                             return Err(Box::new(BundleRejectionError::InternalError(msg)));
                         }
                         _ => {}
@@ -183,7 +172,6 @@ pub async fn send_bundle_with_confirmation(
         if !results.iter().all(|r| matches!(r, Ok(Some(Ok(()))))) {
             tries += 1;
             continue;
-            // warn!("Transactions in bundle did not land");
             // return Err(Box::new(BundleRejectionError::InternalError(
             //     "Searcher service did not provide bundle status in time".into(),
             // )));
@@ -194,7 +182,7 @@ pub async fn send_bundle_with_confirmation(
         }
         break;
     }
-    if tries == MAX_TRIES {
+    if tries == max_tries {
         warn!("Bundle did not land in time");
         return Err(Box::new(BundleRejectionError::InternalError(
             "Searcher service did not provide bundle status in time".into(),
