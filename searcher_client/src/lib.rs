@@ -64,15 +64,15 @@ pub async fn get_searcher_client(
 ) -> BlockEngineConnectionResult<
     SearcherServiceClient<InterceptedService<Channel, ClientInterceptor>>,
 > {
-    let auth_channel = create_grpc_channel(block_engine_url).await?;
+    let auth_channel = create_grpc_channel(block_engine_url).await.unwrap();
     let client_interceptor = ClientInterceptor::new(
         AuthServiceClient::new(auth_channel),
         auth_keypair,
         Role::Searcher,
     )
-    .await?;
+    .await.unwrap();
 
-    let searcher_channel = create_grpc_channel(block_engine_url).await?;
+    let searcher_channel = create_grpc_channel(block_engine_url).await.unwrap();
     let searcher_client =
         SearcherServiceClient::with_interceptor(searcher_channel, client_interceptor);
     Ok(searcher_client)
